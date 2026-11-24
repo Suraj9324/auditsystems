@@ -1,0 +1,136 @@
+import Link from "next/link";
+import { prisma } from "../../../lib/db";
+import { validateSession, getOrganizationForUser } from "../../../lib/auth";
+import { resolveReportResult } from "../../../lib/report-result";
+
+export const metadata = {
+  title: "تاریخچه گزارش‌ها"
+};
+
+export default async function ReportsPage({
+  searchParams
+}: {
+  searchParams: Promise<{ page?: string }>
+}) {
+  const params = await searchParams;
+  const user = await validateSession();
+  if (!user) return null;
+
+  const membership = await getOrganizationForUser(user.id);
+  const org = membership?.organization;
+  if (!org) return null;
+
+  const page = Math.max(1, parseInt(params.page ?? "1", 10) || 1);
+  const pageSize = 20;
+  const skip = (page - 1) * pageSize;
+
+  const [reports, total] = await Promise.all([
+    prisma.auditRun.findMany({
+      where: { organizationId: org.id },
+      include: {
+        project: { select: { name: true } },
+        shares: { select: { token: true }, take: 1 },
+        _count: { select: { findings: true } },
+        findings: { select: { code: true, category: true, severity: true } }
+      },
+      orderBy: { createdAt: "desc" },
+      skip,
+      take: pageSize
+    }),
+    prisma.auditRun.count({ where: { organizationId: org.id } })
+  ]);
+
+  const totalPages = Math.ceil(total / pageSize);
+
+  function scoreColor(score: number): string {
+    if (score >= 81) return "#059669";
+    if (score >= 61) return "#2563eb";
+    if (score >= 41) return "#d97706";
+    return "#dc2626";
+  }
+
+  return (
+    <div>
+      <h1 style={{ fontSize: "1.5rem", fontWeight: 700, marginBottom: "1.5rem" }}>تاریخچه گزارش‌ها</h1>
+
+      {reports.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "3rem", color: "var(--muted)" }}>
+          <p style={{ marginBottom: "1rem" }}>هنوز گزارشی ثبت نشده است.</p>
+          <Link href="/audit" style={{ padding: "0.75rem 1.5rem", background: "var(--brand)", color: "#fff", borderRadius: "0.5rem", textDecoration: "none", fontWeight: 600 }}>
+            شروع ممیزی
+          </Link>
+        </div>
+      ) : (
+        <>
+          <div style={{ border: "1px solid var(--line)", borderRadius: "0.5rem", overflow: "hidden" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.875rem" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid var(--line)", background: "var(--surface-soft)" }}>
+                  <th style={{ textAlign: "right", padding: "0.75rem", fontWeight: 600 }}>آدرس</th>
+                  <th style={{ textAlign: "right", padding: "0.75rem", fontWeight: 600 }}>پروژه</th>
+                  <th style={{ textAlign: "center", padding: "0.75rem", fontWeight: 600 }}>امتیاز</th>
+                  <th style={{ textAlign: "center", padding: "0.75rem", fontWeight: 600 }}>یافته‌ها</th>
+                  <th style={{ textAlign: "right", padding: "0.75rem", fontWeight: 600 }}>تاریخ</th>
+                  <th style={{ textAlign: "center", padding: "0.75rem", fontWeight: 600 }}>عملیات</th>
+                </tr>
+              </thead>
+              <tbody>
+                {reports.map((report) => {
+                  const result = resolveReportResult({ summary: report.summary, findings: report.findings, runStatus: report.status });
+                  const score = result.score?.overall ?? null;
+                  const token = report.shares[0]?.token;
+                  return (
+                    <tr key={report.id} style={{ borderBottom: "1px solid var(--line)" }}>
+                      <td style={{ padding: "0.75rem", maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {report.normalizedUrl ?? report.url}
+                      </td>
+                      <td style={{ padding: "0.75rem", color: "var(--muted)" }}>
+                        {report.project?.name ?? "—"}
+                      </td>
+                      <td style={{ padding: "0.75rem", textAlign: "center" }}>
+                        {score != null ? (
+                          <span style={{ fontWeight: 700, color: scoreColor(score) }}>{score} <small>({result.availability === "PARTIAL" ? "ناقص" : result.availability === "LEGACY" ? "قدیمی" : "کامل"})</small></span>
+                        ) : "—"}
+                      </td>
+                      <td style={{ padding: "0.75rem", textAlign: "center" }}>
+                        {report._count.findings}
+                      </td>
+                      <td style={{ padding: "0.75rem", color: "var(--muted)" }}>
+                        {new Date(report.createdAt).toLocaleDateString("fa-IR")}
+                      </td>
+                      <td style={{ padding: "0.75rem", textAlign: "center" }}>
+                        {token ? (
+                          <Link href={`/audit/r/${token}`} style={{ color: "#2563eb", textDecoration: "none", fontWeight: 600 }}>
+                            مشاهده
+                          </Link>
+                        ) : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {totalPages > 1 && (
+            <div style={{ display: "flex", justifyContent: "center", gap: "0.5rem", marginTop: "1.5rem" }}>
+              {page > 1 && (
+                <Link href={`?page=${page - 1}`} style={{ padding: "0.5rem 1rem", border: "1px solid var(--line)", borderRadius: "0.375rem", textDecoration: "none" }}>
+                  قبلی
+                </Link>
+              )}
+              <span style={{ padding: "0.5rem 1rem", color: "var(--muted)" }}>
+                صفحه {page} از {totalPages}
+              </span>
+              {page < totalPages && (
+                <Link href={`?page=${page + 1}`} style={{ padding: "0.5rem 1rem", border: "1px solid var(--line)", borderRadius: "0.375rem", textDecoration: "none" }}>
+                  بعدی
+                </Link>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}

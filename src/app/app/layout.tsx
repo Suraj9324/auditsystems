@@ -1,0 +1,39 @@
+import { ReactNode } from "react";
+import { redirect } from "next/navigation";
+import Link from "next/link";
+import { validateSession } from "../../lib/auth";
+import { LogoutButton } from "../../components/LogoutButton";
+
+export const metadata = {
+  title: "پنل مدیریت",
+  robots: { index: false, follow: false }
+};
+
+export default async function AppLayout({ children }: { children: ReactNode }) {
+  const user = await validateSession();
+  if (!user) {
+    redirect("/login");
+  }
+
+  return (
+    <div className="app-shell" style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+      <header className="topbar" style={{ borderBottom: "1px solid var(--border)", padding: "0.75rem 1.5rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <Link href="/app" style={{ fontWeight: 700, fontSize: "1.125rem", textDecoration: "none", color: "var(--text)" }}>
+          سیستم ممیزی
+        </Link>
+        <nav style={{ display: "flex", gap: "1.5rem", alignItems: "center" }}>
+          <Link href="/app/projects" style={{ textDecoration: "none", color: "var(--text)", fontSize: "0.875rem" }}>پروژه‌ها</Link>
+          <Link href="/app/team" style={{ textDecoration: "none", color: "var(--text)", fontSize: "0.875rem" }}>تیم</Link>
+          <Link href="/app/referrals" style={{ textDecoration: "none", color: "var(--text)", fontSize: "0.875rem" }}>معرفی</Link>
+          <Link href="/app/notifications" style={{ textDecoration: "none", color: "var(--text)", fontSize: "0.875rem" }}>اعلانات</Link>
+          <Link href="/app/billing" style={{ textDecoration: "none", color: "var(--text)", fontSize: "0.875rem" }}>اشتراک و صورتحساب</Link>
+          <span style={{ color: "var(--muted)", fontSize: "0.875rem" }}>{user.email}</span>
+          <LogoutButton />
+        </nav>
+      </header>
+      <main style={{ flex: 1, padding: "2rem 1.5rem", maxWidth: "64rem", margin: "0 auto", width: "100%" }}>
+        {children}
+      </main>
+    </div>
+  );
+}

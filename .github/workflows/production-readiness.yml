@@ -1,0 +1,88 @@
+name: production-readiness
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "45 4 * * *"
+
+jobs:
+  readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            pnpm install --frozen-lockfile
+          else
+            pnpm install --no-frozen-lockfile
+          fi
+
+      - name: Scan tracked source for secrets
+        run: pnpm run scan:secrets
+
+      - name: Quality + Roadmap + Docs + Payment preflight
+        env:
+          APP_BASE_URL: "https://audit.alirezasafaeisystems.ir"
+          DOWNLOAD_TOKEN_SECRET: "ci-readiness-download-token-secret-2026"
+          PAYMENT_PROVIDER_DEFAULT: "MOCK"
+          ZARINPAL_MERCHANT_ID: ${{ secrets.ZARINPAL_MERCHANT_ID }}
+          UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
+          UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
+          REQUIRE_DISTRIBUTED_RATE_LIMIT: "false"
+        run: |
+          pnpm prisma generate
+          pnpm run check
+          pnpm run roadmap:run
+          pnpm run docs:generate
+          pnpm run payment:preflight:strict
+
+      - name: Zarinpal smoke test (if merchant configured)
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          ZARINPAL_MERCHANT_ID: ${{ secrets.ZARINPAL_MERCHANT_ID }}
+        run: |
+          if [ -n "${ZARINPAL_MERCHANT_ID}" ]; then
+            pnpm run payment:zarinpal:smoke
+          else
+            echo "ZARINPAL_MERCHANT_ID is not set; skipping zarinpal smoke test."
+          fi
+
+      - name: ASDEV network baseline (live GET/HEAD + locale)
+        env:
+          NO_PROXY: "*"
+        run: timeout 300s pnpm run network:baseline
+        continue-on-error: true
+
+      - name: Hosting sync check (non-SSH, non-blocking network-aware)
+        run: |
+          mkdir -p logs/deploy
+          bash scripts/deploy/check-hosting-sync.sh | tee logs/deploy/ci-hosting-sync.log
+
+      - name: Upload readiness artifacts
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.4
+        with:
+          name: production-readiness-reports
+          retention-days: 3
+          path: |
+            logs/roadmap/
+            logs/preflight/
+            logs/runtime/
+            logs/deploy/
+            docs/AUTO_GENERATED_STATUS.md

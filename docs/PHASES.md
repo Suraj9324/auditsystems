@@ -1,0 +1,63 @@
+# Execution Phases
+
+این سند acceptance criteria هر فاز را مشخص می‌کند.
+
+## Phase A — Foundation (Done)
+- `POST /api/audit/runs` کار می‌کند.
+- `AuditRun` و `ReportShare.token` ذخیره می‌شوند.
+- صفحه گزارش token-based قابل مشاهده است.
+
+## Phase B — Scanner MVP (Done)
+- Worker job را lease و اجرا می‌کند.
+- URL normalization + SSRF guard فعال است.
+- resource extraction از HTML انجام می‌شود.
+
+## Phase C — Findings + Summary (Done)
+- findings با code/severity/recommendation/evidence ذخیره می‌شود.
+- summary نسخه‌بندی‌شده `asdev.audit.summary.v1` تولید می‌شود.
+- endpoint گزارش summary/findings را ارائه می‌دهد.
+
+## Phase D — Unlock Funnel (Done)
+- capture ایمیل در unlock انجام می‌شود.
+- mock order و event ثبت می‌شود.
+- unlock برای گزارش آماده‌نشده رد می‌شود.
+
+## Phase E — Security/Ops Hardening (Done)
+- rate limit روی create run
+- error sanitization
+- request-id و structured logs
+- no-store برای APIهای حساس
+- `/api/metrics` برای observability
+
+## Phase F — Monetization (Done)
+- payment provider واقعی (Zarinpal abstraction)
+- callback handling
+- download flow برای گزارش paid
+
+## Phase G — SEO Scale (Done)
+- guide content pipeline
+- crawl depth expansion baseline
+- findings پیشرفته‌تر SEO baseline
+- sitemap/robots/canonical
+
+## Phase H — Excellence / Momtaz (Done)
+- دو‌زبانه‌سازی مسیرهای اصلی (`fa/en`) با UX هم‌راستا
+- SEO چندزبانه (canonical + hreflang + sitemap bilingual)
+- hardening لایه edge + health probes (`/api/live`, `/api/ready`)
+
+## Phase I — SEO Execution Automation (Done)
+- metadata کامل برای templateهای indexable
+- noindex برای مسیرهای tokenized و failed
+- localization واقعی راهنماها در `fa/en`
+- breadcrumb/article schema برای guide templates
+- `sitemap.xml` با `lastmod` واقعی بر پایه داده محتوا
+- اتوماسیون SEO checks با `pnpm run seo:audit`
+
+## Phase J — Shared VPS Production Rollout (Done)
+- اپ روی ساب‌دامین مستقل برند (`audit.alirezasafaeisystems.ir`) و staging (`staging.audit.alirezasafaeisystems.ir`) publish شده است.
+- health checks عمومی برقرار است: `GET /api/ready` روی production/staging با `200` و دیتابیس `pass`.
+- TLS معتبر و redirect HTTP->HTTPS فعال است.
+- runtime isolation عملیاتی اعمال شده: bind روی `127.0.0.1` + reverse proxy در Nginx.
+- PM2 startup پایدار با `pm2-deploy.service` نهایی شده و سرویس‌های متداخل غیرفعال شده‌اند.
+- server hardening baseline تکمیل شده: swap به `2G` ارتقا یافت و logrotate اپلیکیشن‌ها فعال شد.
+- لینک‌دهی داخلی از مسیرهای برند به مسیرهای audit و صفحه برند ASDEV Portfolio در `fa/en` برقرار است.

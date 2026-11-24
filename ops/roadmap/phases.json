@@ -1,0 +1,201 @@
+{
+  "version": "1.2.0",
+  "defaultMode": "done_and_in_progress",
+  "phases": [
+    {
+      "id": "A",
+      "title": "Foundation",
+      "status": "done",
+      "checks": [
+        {
+          "id": "foundation-files",
+          "description": "Core foundation files exist",
+          "command": "test -f package.json && test -f prisma/schema.prisma && test -f docker-compose.yml"
+        },
+        {
+          "id": "foundation-typecheck",
+          "description": "Type system is healthy",
+          "command": "pnpm run typecheck"
+        }
+      ]
+    },
+    {
+      "id": "B",
+      "title": "Scanner MVP",
+      "status": "done",
+      "checks": [
+        {
+          "id": "scanner-unit-tests",
+          "description": "Scanner-related unit tests pass",
+          "command": "pnpm run test"
+        },
+        {
+          "id": "scanner-ssrf-guard",
+          "description": "SSRF guard implementation exists",
+          "command": "grep -nE \"SSRF_BLOCKED\" src/lib/normalizeAuditTargetUrl.ts"
+        }
+      ]
+    },
+    {
+      "id": "C",
+      "title": "Report UX + Summary JSON",
+      "status": "done",
+      "checks": [
+        {
+          "id": "summary-schema-v1",
+          "description": "Summary schema v1 is present",
+          "command": "grep -nE \"asdev.audit.summary.v1\" src/lib/summary.ts src/lib/summary.types.ts"
+        },
+        {
+          "id": "report-route-present",
+          "description": "Public report route exists",
+          "command": "test -f src/app/api/reports/[token]/route.ts"
+        }
+      ]
+    },
+    {
+      "id": "D",
+      "title": "Lead/Order Gating",
+      "status": "done",
+      "checks": [
+        {
+          "id": "unlock-route-present",
+          "description": "Unlock endpoint exists",
+          "command": "test -f src/app/api/reports/[token]/unlock/route.ts"
+        },
+        {
+          "id": "orders-endpoint-present",
+          "description": "Order endpoint exists",
+          "command": "test -f src/app/api/orders/route.ts"
+        }
+      ]
+    },
+    {
+      "id": "E",
+      "title": "Security and Ops Hardening",
+      "status": "done",
+      "checks": [
+        {
+          "id": "rate-limit-create-run",
+          "description": "Rate limit control exists on create run",
+          "command": "grep -nE \"consumeDistributedRateLimit|RATE_LIMITED\" src/app/api/audit/runs/route.ts src/lib/rateLimit.ts"
+        },
+        {
+          "id": "observability-request-id",
+          "description": "Request id instrumentation exists",
+          "command": "grep -R -nE \"requestId|x-request-id\" src/lib/observability.ts src/app/api"
+        },
+        {
+          "id": "metrics-endpoint",
+          "description": "Prometheus-style metrics endpoint exists",
+          "command": "test -f src/app/api/metrics/route.ts && grep -nE \"audit_api_requests_total\" src/lib/metrics.ts"
+        },
+        {
+          "id": "quality-gate",
+          "description": "Full quality gate passes",
+          "command": "pnpm run check"
+        }
+      ]
+    },
+    {
+      "id": "F",
+      "title": "Monetization and Delivery",
+      "status": "done",
+      "checks": [
+        {
+          "id": "payment-callback-route",
+          "description": "Payment callback route is implemented",
+          "command": "test -f src/app/api/payments/callback/route.ts"
+        },
+        {
+          "id": "provider-integration",
+          "description": "Payment provider integration exists",
+          "command": "grep -nE \"ZARINPAL|createCheckout|verifyCheckout\" src/lib/payments.ts src/app/api/payments/callback/route.ts"
+        },
+        {
+          "id": "pdf-delivery-route",
+          "description": "Paid PDF endpoint exists",
+          "command": "test -f src/app/api/pdf/[token]/route.ts"
+        }
+      ]
+    },
+    {
+      "id": "G",
+      "title": "SEO Scale",
+      "status": "done",
+      "checks": [
+        {
+          "id": "guides-pipeline",
+          "description": "Programmatic guides and pillar pages exist",
+          "command": "test -f src/app/guides/page.tsx && test -f src/app/guides/[slug]/page.tsx && test -f src/app/pillar/iran-readiness-audit/page.tsx"
+        },
+        {
+          "id": "seo-indexability",
+          "description": "Sitemap and robots routes exist",
+          "command": "test -f src/app/sitemap.ts && test -f src/app/robots.ts"
+        }
+      ]
+    },
+    {
+      "id": "H",
+      "title": "Excellence / Momtaz",
+      "status": "done",
+      "checks": [
+        {
+          "id": "bilingual-routes",
+          "description": "Bilingual product routes exist",
+          "command": "test -f src/app/en/page.tsx && test -f src/app/en/audit/page.tsx && test -f src/app/en/guides/page.tsx && test -f src/app/en/guides/[slug]/page.tsx"
+        },
+        {
+          "id": "edge-security-middleware",
+          "description": "Canonical edge security proxy behavior is enforced",
+          "command": "pnpm exec vitest run src/proxy.governance.test.ts"
+        },
+        {
+          "id": "health-probe-model",
+          "description": "Liveness and readiness probes are present",
+          "command": "test -f src/app/api/live/route.ts && test -f src/app/api/ready/route.ts && test -f src/lib/health.ts"
+        }
+      ]
+    },
+    {
+      "id": "I",
+      "title": "SEO Execution Automation",
+      "status": "done",
+      "checks": [
+        {
+          "id": "seo-infra-files",
+          "description": "SEO automation infrastructure files exist",
+          "command": "test -f src/lib/site.ts && test -f src/lib/seoMeta.ts && test -f src/scripts/seo-audit-automation.ts"
+        },
+        {
+          "id": "seo-audit-strict",
+          "description": "Strict SEO automation checks pass",
+          "command": "pnpm run seo:audit"
+        }
+      ]
+    },
+    {
+      "id": "J",
+      "title": "Shared VPS Production Rollout",
+      "status": "done",
+      "checks": [
+        {
+          "id": "deploy-tooling-ready",
+          "description": "Deploy and rollback tooling for non-docker runtime exists",
+          "command": "test -f ops/deploy/deploy.sh && test -f ops/deploy/rollback.sh && test -f scripts/deploy/provision-nginx-site.sh"
+        },
+        {
+          "id": "nginx-template-ready",
+          "description": "Nginx template and production rollout runbook exist",
+          "command": "test -f ops/nginx/asdev-audit-ir.conf && test -f docs/ROADMAP_SHARED_VPS_PRODUCTION.md"
+        },
+        {
+          "id": "live-domains-ready",
+          "description": "Rollout runtime contracts (health probes + host binding + rollout docs) are present",
+          "command": "test -f src/app/api/live/route.ts && test -f src/app/api/ready/route.ts && grep -nF \"export HOSTNAME=127.0.0.1\" ops/deploy/deploy.sh && grep -nF \"args: '.next/standalone/server.js'\" ops/deploy/deploy.sh && grep -nF \"/api/ready\" ops/deploy/deploy.sh && test -f docs/ROADMAP_SHARED_VPS_PRODUCTION.md && test -f docs/PROJECT_ANALYSIS_REAL_DATA.md"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,596 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── SaaS Models ───────────────────────────────────────────────
+
+model User {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  name            String?
+  passwordHash    String
+  emailVerifiedAt DateTime?
+  referralCode    String?   @unique
+  referredBy      String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  memberships        Membership[]
+  sessions           Session[]
+  emailVerifications EmailVerificationToken[]
+  referralsGiven     Referral[]               @relation("ReferralGiven")
+  referralsReceived  Referral[]               @relation("ReferralReferred")
+  teamInvites        TeamMemberInvite[]       @relation("TeamInviteUser")
+}
+
+model Referral {
+  id          String    @id @default(cuid())
+  referrerId  String
+  referredId  String
+  code        String
+  convertedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  referrer User @relation("ReferralGiven", fields: [referrerId], references: [id], onDelete: Cascade)
+  referred User @relation("ReferralReferred", fields: [referredId], references: [id], onDelete: Cascade)
+
+  @@unique([referrerId, referredId])
+  @@index([referrerId])
+  @@index([referredId])
+  @@index([code])
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Brand Settings
+  brandName       String?
+  brandLogoBase64 String? @db.Text
+  primaryColor    String?
+  secondaryColor  String?
+
+  memberships            Membership[]
+  teamInvites            TeamMemberInvite[]      @relation("TeamInviteOrganization")
+  projects               Project[]
+  auditRuns              AuditRun[]
+  subscriptions          Subscription[]
+  usageLedgers           UsageLedger[]
+  invoices               Invoice[]
+  scheduledAudits        ScheduledAudit[]
+  notificationPreference NotificationPreference?
+  notificationHistory    NotificationHistory[]
+  billingEvents          BillingEvent[]
+}
+
+model Membership {
+  id             String   @id @default(cuid())
+  userId         String
+  organizationId String
+  role           String   @default("OWNER")
+  createdAt      DateTime @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([userId])
+}
+
+model AdminSession {
+  id        String    @id
+  tokenHash String    @unique
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  revokedAt DateTime?
+  lastSeenAt DateTime?
+
+  @@index([expiresAt])
+  @@index([revokedAt, expiresAt])
+}
+
+model Project {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  domain         String
+  normalizedUrl  String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  auditRuns       AuditRun[]
+  scheduledAudits ScheduledAudit[]
+}
+
+// ─── Existing Models ───────────────────────────────────────────
+
+enum AuditStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum AuditReportStatus {
+  QUEUED
+  RUNNING
+  REVIEW
+  DELIVERED
+  FAILED
+}
+
+enum AuditDepth {
+  QUICK
+  DEEP
+}
+
+enum FindingSeverity {
+  INFO
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum FindingCategory {
+  RESILIENCE
+  PERFORMANCE
+  SEO
+  SECURITY
+  UX
+  ACCESSIBILITY
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  FAILED
+  CANCELED
+  EXPIRED
+}
+
+enum PaymentProvider {
+  ZARINPAL
+  IDPAY
+  PAYPING
+  MOCK
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum JobType {
+  AUDIT_RUN
+}
+
+enum LeadStatus {
+  NEW
+  QUALIFIED
+  AUDIT_STARTED
+  REPORT_READY
+  DELIVERED
+  CONVERTED
+  LOST
+}
+
+model AuditRun {
+  id            String            @id @default(cuid())
+  url           String
+  normalizedUrl String?
+  depth         AuditDepth        @default(QUICK)
+  status        AuditStatus       @default(QUEUED)
+  reportStatus  AuditReportStatus @default(QUEUED)
+
+  projectId      String?
+  organizationId String?
+
+  ipHash       String?
+  userAgent    String?
+  locale       String?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  errorCode    String?
+  errorMessage String?
+
+  summary    Json?
+  lighthouse Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  project      Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  findings     AuditFinding[]
+  resources    AuditResource[]
+  shares       ReportShare[]
+  leads        AuditLead[]
+  orders       AuditOrder[]
+  funnelEvents FunnelEvent[]
+
+  @@index([normalizedUrl, createdAt])
+  @@index([status, createdAt])
+  @@index([projectId, createdAt])
+  @@index([organizationId, createdAt])
+}
+
+model AuditFinding {
+  id             String          @id @default(cuid())
+  runId          String
+  category       FindingCategory
+  severity       FindingSeverity
+  code           String
+  title          String
+  description    String?
+  recommendation String?
+  evidence       Json?
+
+  createdAt DateTime @default(now())
+
+  run AuditRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, category, severity])
+  @@index([code])
+}
+
+model AuditResource {
+  id           String   @id @default(cuid())
+  runId        String
+  kind         String
+  url          String
+  host         String?
+  isThirdParty Boolean  @default(false)
+  inHead       Boolean?
+  attrs        Json?
+  riskTag      String?
+  sizeBytes    Int?
+
+  createdAt DateTime @default(now())
+
+  run AuditRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, isThirdParty])
+  @@index([host])
+}
+
+model ReportShare {
+  id           String    @id @default(cuid())
+  runId        String
+  token        String    @unique
+  createdAt    DateTime  @default(now())
+  expiresAt    DateTime?
+  revokedAt    DateTime?
+  viewCount    Int       @default(0)
+  lastViewedAt DateTime?
+  passwordHash String?
+
+  run AuditRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+}
+
+model AuditLead {
+  id    String  @id @default(cuid())
+  runId String?
+
+  domain          String     @default("unknown")
+  normalizedUrl   String?
+  email           String
+  name            String?
+  phone           String?
+  company         String?
+  businessType    String     @default("unknown")
+  primaryConcern  String     @default("unknown")
+  consentPrivacy  Boolean    @default(false)
+  status          LeadStatus @default(NEW)
+  internalNote    String?
+  nextActionAt    DateTime?
+  lostReason      String?
+  leadSource      String     @default("direct")
+  sourcePlacement String?
+  sourceOffer     String?
+  submitEventId   String?
+  qualifiedAt     DateTime?
+  lostAt          DateTime?
+  note            String?
+  convertedAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  run          AuditRun?     @relation(fields: [runId], references: [id], onDelete: SetNull)
+  orders       AuditOrder[]
+  funnelEvents FunnelEvent[]
+
+  @@index([email, createdAt])
+  @@index([domain, createdAt])
+  @@index([status, createdAt])
+  @@index([leadSource, createdAt])
+  @@index([runId, createdAt])
+}
+
+model AuditOrder {
+  id    String @id @default(cuid())
+  runId String
+
+  email       String
+  amountToman Int
+  status      OrderStatus     @default(PENDING)
+  provider    PaymentProvider @default(MOCK)
+  providerRef String?
+  callbackRef String?
+
+  createdAt  DateTime  @default(now())
+  paidAt     DateTime?
+  canceledAt DateTime?
+
+  leadId String?
+
+  run    AuditRun          @relation(fields: [runId], references: [id], onDelete: Cascade)
+  lead   AuditLead?        @relation(fields: [leadId], references: [id])
+  events AuditOrderEvent[]
+
+  @@index([runId, status])
+  @@index([email, createdAt])
+  @@index([leadId])
+}
+
+model AuditOrderEvent {
+  id      String @id @default(cuid())
+  orderId String
+  kind    String
+  payload Json?
+
+  createdAt DateTime @default(now())
+
+  order AuditOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
+}
+
+model FunnelEvent {
+  id        String  @id @default(cuid())
+  eventType String
+  leadId    String?
+  runId     String?
+  source    String?
+  placement String?
+  offer     String?
+  metadata  Json?
+
+  createdAt DateTime @default(now())
+
+  lead AuditLead? @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  run  AuditRun?  @relation(fields: [runId], references: [id], onDelete: SetNull)
+
+  @@index([eventType, createdAt])
+  @@index([leadId, createdAt])
+  @@index([runId, createdAt])
+  @@index([source, createdAt])
+}
+
+model Job {
+  id          String    @id @default(cuid())
+  type        JobType
+  status      JobStatus @default(QUEUED)
+  payload     Json
+  attempt     Int       @default(0)
+  maxAttempts Int       @default(3)
+  timeoutMs   Int       @default(45000)
+  availableAt DateTime  @default(now())
+  lockedAt    DateTime?
+  leasedUntil DateTime?
+  workerId    String?
+  lastError   String?
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([status, availableAt])
+  @@index([type, status])
+  @@index([leasedUntil])
+}
+
+// ─── Sprint 3: Revenue + Retention Models ───────────────────────
+
+model Plan {
+  id                String   @id @default(cuid())
+  code              String   @unique
+  name              String
+  priceMonthlyToman Int      @default(0)
+  projectLimit      Int      @default(1)
+  monthlyAuditLimit Int      @default(3)
+  pdfExport         Boolean  @default(false)
+  scheduledAudits   Boolean  @default(false)
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  subscriptions Subscription[]
+  invoices      Invoice[]
+}
+
+model Subscription {
+  id                 String   @id @default(cuid())
+  organizationId     String
+  planId             String
+  status             String   @default("ACTIVE") // ACTIVE | PENDING | PAST_DUE | CANCELED
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan         Plan         @relation(fields: [planId], references: [id])
+  invoices     Invoice[]
+
+  @@index([organizationId, status])
+  @@index([planId])
+}
+
+model UsageLedger {
+  id             String   @id @default(cuid())
+  organizationId String
+  type           String // AUDIT_RUN | PDF_EXPORT | API_CALL | SCHEDULED_AUDIT
+  quantity       Int      @default(1)
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, type, createdAt])
+}
+
+model Invoice {
+  id             String          @id @default(cuid())
+  organizationId String
+  subscriptionId String?
+  planId         String
+  amountToman    Int
+  status         String          @default("PENDING") // PENDING | PAID | FAILED | CANCELED
+  provider       PaymentProvider @default(MOCK)
+  providerRef    String?
+  callbackRef    String?
+  paidAt         DateTime?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id])
+  plan         Plan          @relation(fields: [planId], references: [id])
+
+  @@index([organizationId, status])
+  @@index([callbackRef])
+}
+
+model ScheduledAudit {
+  id             String    @id @default(cuid())
+  organizationId String
+  projectId      String
+  frequency      String // WEEKLY | MONTHLY
+  enabled        Boolean   @default(true)
+  nextRunAt      DateTime
+  lastRunAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, enabled])
+  @@index([nextRunAt, enabled])
+}
+
+model TeamMemberInvite {
+  id             String    @id @default(cuid())
+  organizationId String
+  email          String
+  role           String    @default("VIEWER")
+  tokenHash      String    @unique
+  invitedById    String
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation("TeamInviteOrganization", fields: [organizationId], references: [id], onDelete: Cascade)
+  invitedBy    User         @relation("TeamInviteUser", fields: [invitedById], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, email])
+  @@index([organizationId])
+  @@index([tokenHash])
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tokenHash])
+  @@index([userId, createdAt])
+}
+
+model NotificationPreference {
+  id             String   @id @default(cuid())
+  organizationId String   @unique
+  emailEnabled   Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+model NotificationHistory {
+  id             String   @id @default(cuid())
+  organizationId String
+  type           String // AUDIT_COMPLETE
+  subject        String
+  body           String
+  email          String
+  sentAt         DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, sentAt])
+}
+
+model BillingEvent {
+  id             String   @id @default(cuid())
+  organizationId String
+  entityType     String
+  entityId       String
+  eventType      String
+  actor          String?
+  details        Json?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, eventType])
+}
+
+model NewsletterSubscriber {
+  id        String   @id @default(cuid())
+  email     String
+  locale    String   @default("fa")
+  subscribedAt DateTime @default(now())
+  unsubscribedAt DateTime?
+
+  @@unique([email])
+  @@index([email])
+  @@index([subscribedAt])
+}

@@ -1,0 +1,298 @@
+name: nightly-audit
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  PUBLIC_URL: https://audit.alirezasafaeisystems.ir
+  VPS_BASE_DIR: /var/www/asdev-audit-ir
+
+jobs:
+  quality-gate:
+    runs-on: [self-hosted, linux, x64, asdev-ci]
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Unit tests
+        env:
+          APP_BASE_URL: "https://audit.alirezasafaeisystems.ir"
+          DOWNLOAD_TOKEN_SECRET: "ci-nightly-download-secret-min-16"
+          PAYMENT_PROVIDER_DEFAULT: "MOCK"
+        run: pnpm test
+
+      - name: Build
+        env:
+          APP_BASE_URL: "https://audit.alirezasafaeisystems.ir"
+          DOWNLOAD_TOKEN_SECRET: "ci-nightly-download-secret-min-16"
+          PAYMENT_PROVIDER_DEFAULT: "MOCK"
+          REQUIRE_DISTRIBUTED_RATE_LIMIT: "false"
+        run: pnpm run build
+
+      - name: Local smoke test
+        env:
+          APP_BASE_URL: "http://127.0.0.1:3120"
+          DOWNLOAD_TOKEN_SECRET: "ci-nightly-download-secret-min-16"
+          PAYMENT_PROVIDER_DEFAULT: "MOCK"
+          REQUIRE_DISTRIBUTED_RATE_LIMIT: "false"
+        run: |
+          set -euo pipefail
+          LOG_FILE="${RUNNER_TEMP}/nightly-smoke.log"
+          BODY_FILE="${RUNNER_TEMP}/nightly-ready.json"
+          PORT=3120 pnpm run start >"$LOG_FILE" 2>&1 &
+          APP_PID=$!
+          trap 'kill "$APP_PID" >/dev/null 2>&1 || true' EXIT
+
+          READY_STATUS="000"
+          for _ in $(seq 1 40); do
+            READY_STATUS=$(curl -sS -o "$BODY_FILE" -w "%{http_code}" --max-time 3 http://127.0.0.1:3120/api/ready || true)
+            if [ "$READY_STATUS" = "200" ] || [ "$READY_STATUS" = "503" ]; then
+              break
+            fi
+            sleep 1
+          done
+
+          if [ "$READY_STATUS" != "200" ] && [ "$READY_STATUS" != "503" ]; then
+            echo "::error::Local app did not expose readiness; last HTTP status was ${READY_STATUS}"
+            cat "$LOG_FILE" || true
+            exit 1
+          fi
+
+          READY_HTTP_STATUS="$READY_STATUS" READY_BODY_FILE="$BODY_FILE" node <<'NODE'
+          const fs = require('node:fs');
+          const statusCode = Number(process.env.READY_HTTP_STATUS);
+          const payload = JSON.parse(fs.readFileSync(process.env.READY_BODY_FILE, 'utf8'));
+          const validState = payload.status === 'ready' || payload.status === 'degraded';
+          const validPair = (payload.status === 'ready' && payload.ok === true && statusCode === 200)
+            || (payload.status === 'degraded' && payload.ok === false && statusCode === 503);
+          if (!validState || !validPair || !Array.isArray(payload.checks)) {
+            console.error('Invalid readiness contract', { statusCode, payload });
+            process.exit(1);
+          }
+          console.log(`Readiness contract valid: ${payload.status} (${statusCode})`);
+          NODE
+
+      - name: Upload build artifacts
+        if: failure() || github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nightly-build-${{ github.run_number }}
+          path: |
+            .next/standalone/
+            .next/static/
+            public/
+          retention-days: 1
+
+  production-smoke:
+    runs-on: [self-hosted, linux, x64, asdev-ci]
+    timeout-minutes: 10
+    needs: quality-gate
+    if: always()
+
+    steps:
+      - name: Production health check
+        run: |
+          echo "==> Checking production health..."
+          PASS=0
+          FAIL=0
+          check() {
+            local path="$1" expected="$2" desc="$3"
+            local url="${PUBLIC_URL}${path}"
+            local status
+            status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "$url" 2>/dev/null || echo "000")
+            if [ "$status" = "$expected" ]; then
+              echo "  ✓ ${desc} -> ${status}"
+              PASS=$((PASS + 1))
+            else
+              echo "  ✗ ${desc} -> ${status} (expected ${expected})"
+              FAIL=$((FAIL + 1))
+            fi
+          }
+
+          echo "Health & readiness..."
+          check "/api/ready" "200" "API ready"
+          check "/api/health" "200" "API health"
+          echo ""
+
+          echo "Core pages..."
+          check "/" "200" "Homepage"
+          check "/audit" "200" "Audit form"
+          check "/pricing" "200" "Pricing"
+          check "/sample-report" "200" "Sample report"
+          echo ""
+
+          echo "API security..."
+          check "/api/csrf" "200" "CSRF endpoint"
+          check "/api/billing/current" "401" "Billing (unauth)"
+          echo ""
+
+          echo "Results: ${PASS} passed, ${FAIL} failed"
+          if [ "$FAIL" -gt 0 ]; then
+            echo "::error::Production smoke test failed with ${FAIL} failures"
+            exit 1
+          fi
+
+  alert-on-failure:
+    runs-on: [self-hosted, linux, x64, asdev-ci]
+    needs: [quality-gate, production-smoke]
+    if: failure()
+
+    steps:
+      - name: Send failure alert
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -n "${TELEGRAM_BOT_TOKEN}" ] && [ -n "${TELEGRAM_CHAT_ID}" ]; then
+            MESSAGE="🚨 *Nightly Audit FAILED*%0A%0A"
+            MESSAGE+="Run: #${{ github.run_number }}%0A"
+            MESSAGE+="Ref: ${{ github.ref_name }}%0A"
+            MESSAGE+="Quality: ${{ needs.quality-gate.result }}%0A"
+            MESSAGE+="Smoke: ${{ needs.production-smoke.result }}%0A"
+            MESSAGE+="%0Ahttps://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              -d chat_id="${TELEGRAM_CHAT_ID}" \
+              -d text="${MESSAGE}" \
+              -d parse_mode="Markdown" \
+              --max-time 10 || echo "Failed to send Telegram alert"
+          else
+            echo "Telegram credentials not configured; skipping alert"
+          fi
+
+      - name: Create GitHub issue on failure
+        env:
+          QUALITY_RESULT: ${{ needs.quality-gate.result }}
+          SMOKE_RESULT: ${{ needs.production-smoke.result }}
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const title = `🚨 Nightly Audit Failed — ${new Date().toISOString().split('T')[0]}`;
+            const qualityResult = process.env.QUALITY_RESULT || 'unknown';
+            const smokeResult = process.env.SMOKE_RESULT || 'unknown';
+            const body = [
+              '## Nightly Audit Failure',
+              '',
+              `| Check | Result |`,
+              `|-------|--------|`,
+              `| Quality Gate | ${qualityResult} |`,
+              `| Production Smoke | ${smokeResult} |`,
+              '',
+              `**Run**: [#${context.runNumber}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+              `**Ref**: ${context.ref}`,
+              `**Date**: ${new Date().toISOString()}`,
+              '',
+              '---',
+              '*Auto-created by nightly-audit workflow*'
+            ].join('\n');
+
+            const openFailures = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'nightly-failure,automated',
+              per_page: 100
+            });
+
+            const existing = openFailures.find((issue) => !issue.pull_request);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body
+              });
+              core.info(`Updated existing failure issue #${existing.number}.`);
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['nightly-failure', 'automated']
+              });
+            }
+
+  nightly-report:
+    runs-on: [self-hosted, linux, x64, asdev-ci]
+    needs: [quality-gate, production-smoke]
+    if: always()
+
+    steps:
+      - name: Generate report
+        run: |
+          echo "## Nightly Audit Report" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Check | Result |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Quality Gate | \`${{ needs.quality-gate.result }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Production Smoke | \`${{ needs.production-smoke.result }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Date | $(date -u +%Y-%m-%dT%H:%M:%SZ) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${{ needs.quality-gate.result }}" = "success" ] && [ "${{ needs.production-smoke.result }}" = "success" ]; then
+            echo "**Status: ALL PASS** ✅" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "**Status: FAILURES DETECTED** ❌" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Close resolved nightly failure issues
+        if: github.event_name == 'schedule' && github.ref == 'refs/heads/main' && needs.quality-gate.result == 'success' && needs.production-smoke.result == 'success'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'nightly-failure,automated',
+              per_page: 100
+            });
+
+            const resolved = issues.filter((issue) => !issue.pull_request);
+            for (const issue of resolved) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `Resolved by successful scheduled nightly run ${context.runId}: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'closed',
+                state_reason: 'completed'
+              });
+            }
+
+            core.info(`Closed ${resolved.length} resolved nightly failure issue(s).`)
